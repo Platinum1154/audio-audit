@@ -1,0 +1,30 @@
+[project]
+name = "audio-audit"
+version = "0.1.0"
+description = "Local browser-based audio audit workspace"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.116,<1.0",
+    "mutagen>=1.47,<2.0",
+    "uvicorn[standard]>=0.35,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4,<9.0",
+]
+
+[project.scripts]
+audio-audit = "audio_audit.app:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audio_audit"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

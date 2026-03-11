@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Audit</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar panel">
+        <div>
+          <p class="eyebrow">Audio Audit</p>
+          <h1>浏览器里的音频审计台</h1>
+        </div>
+        <div class="toolbar">
+          <button id="browseButton" class="button button-secondary">选择文件夹</button>
+          <input
+            id="rootInput"
+            class="path-input"
+            type="text"
+            placeholder="输入待审核目录的绝对路径"
+          />
+          <button id="loadButton" class="button">加载目录</button>
+          <button id="reloadButton" class="button button-secondary">重新扫描</button>
+          <a id="exportButton" class="button button-secondary button-link" href="#" download>
+            导出日志
+          </a>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel hero-panel">
+          <div class="hero-meta">
+            <div>
+              <p class="eyebrow">Current File</p>
+              <h2 id="fileTitle">还没有加载目录</h2>
+              <p id="fileSubtitle" class="muted">
+                选择任意目录后，系统会递归扫描其中的音频文件。
+              </p>
+            </div>
+            <div class="hero-state">
+              <span id="statusBadge" class="status-badge status-pending">未审核</span>
+              <span id="positionText" class="muted">0 / 0</span>
+            </div>
+          </div>
+
+          <div class="audio-box">
+            <audio id="audioPlayer" controls preload="metadata"></audio>
+            <div class="timeline-box">
+              <span id="currentTime">00:00.0</span>
+              <input id="seekBar" type="range" min="0" max="1000" value="0" />
+              <span id="durationText">--:--</span>
+            </div>
+          </div>
+
+          <div class="visual-grid">
+            <div class="visual-card">
+              <div class="card-head">
+                <span>波形</span>
+                <span class="muted">点击可跳转位置</span>
+              </div>
+              <canvas id="waveformCanvas"></canvas>
+            </div>
+            <div class="visual-card">
+              <div class="card-head">
+                <span>频谱图</span>
+                <span class="muted">基于浏览器解码生成</span>
+              </div>
+              <canvas id="spectrogramCanvas"></canvas>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button class="button" data-action="approve">通过 `Space`</button>
+            <button class="button button-danger" data-action="remove">移除 `K`</button>
+            <button class="button button-secondary" data-action="skip">跳过 `S`</button>
+            <button id="playPauseButton" class="button button-secondary">播放 / 暂停 `P`</button>
+            <button id="undoButton" class="button button-secondary">撤销 `U`</button>
+          </div>
+        </section>
+
+        <aside class="sidebar">
+          <section class="panel stats-panel">
+            <div class="stats-grid" id="statsGrid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <h3>问题标签</h3>
+              <p class="muted">数字键 `1-9` 切换</p>
+            </div>
+            <div id="labelList" class="label-list"></div>
+            <div class="label-form">
+              <input id="newLabelInput" type="text" placeholder="新增标签" />
+              <button id="addLabelButton" class="button button-secondary">添加</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <h3>备注</h3>
+              <p class="muted">备注会和审核动作一起保存</p>
+            </div>
+            <textarea
+              id="noteInput"
+              class="note-input"
+              placeholder="例如：前半段静音，后半段有爆音"
+            ></textarea>
+          </section>
+
+          <section class="panel shortcut-panel">
+            <div class="section-head">
+              <h3>快捷键</h3>
+              <p class="muted">键盘流优先</p>
+            </div>
+            <div class="shortcut-list">
+              <div><kbd>Space</kbd><span>通过并下一条</span></div>
+              <div><kbd>K</kbd><span>移除并下一条</span></div>
+              <div><kbd>S</kbd><span>跳过并下一条</span></div>
+              <div><kbd>R</kbd><span>上一条</span></div>
+              <div><kbd>U</kbd><span>撤销</span></div>
+              <div><kbd>P</kbd><span>播放 / 暂停</span></div>
+              <div><kbd>J</kbd><span>快退 5 秒</span></div>
+              <div><kbd>L</kbd><span>快进 5 秒</span></div>
+            </div>
+          </section>
+        </aside>
+
+        <section class="panel list-panel">
+          <div class="section-head">
+            <h3>审计队列</h3>
+            <p id="queueMeta" class="muted">加载目录后显示文件列表</p>
+          </div>
+          <div id="fileList" class="file-list"></div>
+        </section>
+      </main>
+
+      <footer class="statusbar">
+        <span id="statusMessage">等待加载目录</span>
+      </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
