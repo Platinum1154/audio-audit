@@ -6,13 +6,7 @@ const state = {
   waveformImage: null,
   spectrogramImage: null,
   visualizationToken: 0,
-  decodedBuffer: null,
-  audioContext: null,
-  analyser: null,
-  mediaSource: null,
-  waveformPeaks: [],
-  spectrogramBase: null,
-  renderToken: 0,
+  playbackToken: 0,
   isSeeking: false,
   autoplayAllowed: false,
 };
@@ -103,7 +97,10 @@ function bindEvents() {
   });
 
   refs.audioPlayer.addEventListener("ended", () => {
-    selectNextReviewItem();
+    const item = currentItem();
+    if (item) {
+      setStatus(`播放结束，等待分类: ${item.relative_path}`);
+    }
   });
 
   refs.seekBar.addEventListener("input", () => {
@@ -326,7 +323,11 @@ async function loadAudioForCurrentItem({ autoplay }) {
   }
 
   state.visualizationToken += 1;
-  const token = state.visualizationToken;
+  state.playbackToken += 1;
+  const visualizationToken = state.visualizationToken;
+  const playbackToken = state.playbackToken;
+  refs.audioPlayer.pause();
+  refs.audioPlayer.autoplay = autoplay;
   refs.audioPlayer.src = `${item.audio_url}?v=${Date.now()}`;
   refs.audioPlayer.load();
   refs.currentTime.textContent = "00:00.0";
@@ -334,12 +335,18 @@ async function loadAudioForCurrentItem({ autoplay }) {
   resetVisuals("正在生成可视化");
 
   try {
-    const visualizationTask = loadVisualizations(item, token);
+    const visualizationTask = loadVisualizations(item, visualizationToken);
+    let playStarted = false;
     if (autoplay) {
-      await safePlay();
+      await waitForMediaReady(playbackToken);
+      if (playbackToken === state.playbackToken) {
+        playStarted = await safePlay();
+      }
     }
     await visualizationTask;
-    setStatus(`当前文件: ${item.relative_path}`);
+    if (!autoplay || playStarted) {
+      setStatus(`当前文件: ${item.relative_path}`);
+    }
   } catch (error) {
     resetVisuals("可视化生成失败，但音频仍可播放");
     setStatus(error.message || "音频可视化生成失败");
@@ -362,9 +369,6 @@ async function loadVisualizations(item, token) {
     waveformResult.status === "fulfilled" ? waveformResult.value : null;
   state.spectrogramImage =
     spectrogramResult.status === "fulfilled" ? spectrogramResult.value : null;
-  state.decodedBuffer = null;
-  state.waveformPeaks = [];
-  state.spectrogramBase = null;
 
   if (!state.waveformImage && !state.spectrogramImage) {
     throw new Error("后端可视化生成失败");
@@ -378,6 +382,44 @@ function buildVisualizationUrl(item, kind, canvas) {
   const width = Math.max(320, canvas.width);
   const height = Math.max(180, canvas.height);
   return `${item.visualization_base_url}/${kind}?width=${width}&height=${height}&v=${Date.now()}`;
+}
+
+function waitForMediaReady(playbackToken) {
+  if (playbackToken !== state.playbackToken) {
+    return Promise.resolve();
+  }
+
+  if (refs.audioPlayer.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      refs.audioPlayer.removeEventListener("canplay", onReady);
+      refs.audioPlayer.removeEventListener("loadeddata", onReady);
+      refs.audioPlayer.removeEventListener("error", onError);
+      window.clearTimeout(timeoutId);
+    };
+
+    const finish = (callback) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    const onReady = () => finish(resolve);
+    const onError = () => finish(() => reject(new Error("音频加载失败")));
+    const timeoutId = window.setTimeout(() => finish(resolve), 5000);
+
+    refs.audioPlayer.addEventListener("canplay", onReady);
+    refs.audioPlayer.addEventListener("loadeddata", onReady);
+    refs.audioPlayer.addEventListener("error", onError);
+  });
 }
 
 async function loadCanvasImage(url) {
@@ -402,55 +444,6 @@ async function loadCanvasImage(url) {
   });
 }
 
-async function decodeAudio(arrayBuffer) {
-  const context = await getAudioContext();
-  return context.decodeAudioData(arrayBuffer.slice(0));
-}
-
-async function prepareVisualizerGraph() {
-  const context = await getAudioContext();
-  if (!state.mediaSource) {
-    state.mediaSource = context.createMediaElementSource(refs.audioPlayer);
-    state.analyser = context.createAnalyser();
-    state.analyser.fftSize = 2048;
-    state.mediaSource.connect(state.analyser);
-    state.analyser.connect(context.destination);
-  }
-}
-
-async function getAudioContext() {
-  if (!state.audioContext) {
-    state.audioContext = new AudioContext();
-  }
-  if (state.audioContext.state === "suspended") {
-    try {
-      await state.audioContext.resume();
-    } catch (error) {
-      return state.audioContext;
-    }
-  }
-  return state.audioContext;
-}
-
-function computeWaveformPeaks(buffer) {
-  resizeCanvases();
-  const canvas = refs.waveformCanvas;
-  const channel = buffer.getChannelData(0);
-  const samplesPerColumn = Math.max(1, Math.floor(channel.length / canvas.width));
-  state.waveformPeaks = Array.from({ length: canvas.width }, (_, columnIndex) => {
-    const start = columnIndex * samplesPerColumn;
-    const end = Math.min(channel.length, start + samplesPerColumn);
-    let min = 1;
-    let max = -1;
-    for (let index = start; index < end; index += 1) {
-      const sample = channel[index];
-      if (sample < min) min = sample;
-      if (sample > max) max = sample;
-    }
-    return { min, max };
-  });
-}
-
 function drawWaveform() {
   const canvas = refs.waveformCanvas;
   const context = canvas.getContext("2d");
@@ -466,89 +459,7 @@ function drawWaveform() {
     return;
   }
 
-  if (!state.waveformPeaks.length) {
-    drawCanvasMessage(context, width, height, "等待波形");
-    return;
-  }
-
-  context.save();
-  context.strokeStyle = "#ffbf47";
-  context.lineWidth = 1;
-  context.beginPath();
-
-  state.waveformPeaks.forEach((peak, index) => {
-    const y1 = ((1 - peak.max) / 2) * height;
-    const y2 = ((1 - peak.min) / 2) * height;
-    context.moveTo(index + 0.5, y1);
-    context.lineTo(index + 0.5, y2);
-  });
-
-  context.stroke();
-  context.restore();
-  drawPlayhead(context, width, height);
-}
-
-async function renderSpectrogramBase(buffer, token) {
-  resizeCanvases();
-  const canvas = refs.spectrogramCanvas;
-  const width = Math.min(canvas.width, 420);
-  const height = 128;
-  const offscreen = document.createElement("canvas");
-  offscreen.width = width;
-  offscreen.height = height;
-  const context = offscreen.getContext("2d");
-  const image = context.createImageData(width, height);
-  const data = buffer.getChannelData(0);
-  const windowSize = 256;
-  const bins = 96;
-
-  if (data.length < windowSize) {
-    state.spectrogramBase = offscreen;
-    return;
-  }
-
-  const frames = width;
-  const hop = Math.max(1, Math.floor((data.length - windowSize) / frames));
-
-  for (let frame = 0; frame < frames; frame += 1) {
-    if (token !== state.renderToken) {
-      return;
-    }
-
-    if (frame % 24 === 0) {
-      await nextFrame();
-    }
-
-    const start = frame * hop;
-    const slice = data.subarray(start, start + windowSize);
-    for (let binIndex = 0; binIndex < bins; binIndex += 1) {
-      const frequencyBin = Math.max(
-        1,
-        Math.floor((binIndex / bins) * (windowSize / 2 - 1))
-      );
-      let real = 0;
-      let imaginary = 0;
-      for (let sampleIndex = 0; sampleIndex < windowSize; sampleIndex += 1) {
-        const sample =
-          slice[sampleIndex] * (0.5 - 0.5 * Math.cos((2 * Math.PI * sampleIndex) / (windowSize - 1)));
-        const angle = (2 * Math.PI * frequencyBin * sampleIndex) / windowSize;
-        real += sample * Math.cos(angle);
-        imaginary -= sample * Math.sin(angle);
-      }
-      const magnitude = Math.sqrt(real * real + imaginary * imaginary);
-      const normalized = Math.min(1, Math.log10(1 + magnitude * 32) / 2.4);
-      const y = height - 1 - Math.round((binIndex / (bins - 1)) * (height - 1));
-      const color = heatColor(normalized);
-      const offset = (y * width + frame) * 4;
-      image.data[offset] = color[0];
-      image.data[offset + 1] = color[1];
-      image.data[offset + 2] = color[2];
-      image.data[offset + 3] = 255;
-    }
-  }
-
-  context.putImageData(image, 0, 0);
-  state.spectrogramBase = offscreen;
+  drawCanvasMessage(context, width, height, "等待波形");
 }
 
 function drawSpectrogram() {
@@ -565,13 +476,7 @@ function drawSpectrogram() {
     return;
   }
 
-  if (!state.spectrogramBase) {
-    drawCanvasMessage(context, width, height, "等待频谱图");
-    return;
-  }
-
-  context.drawImage(state.spectrogramBase, 0, 0, width, height);
-  drawPlayhead(context, width, height);
+  drawCanvasMessage(context, width, height, "等待频谱图");
 }
 
 function drawCanvasBackground(context, width, height) {
@@ -610,9 +515,6 @@ function drawPlayhead(context, width, height) {
 function resetVisuals(message) {
   state.waveformImage = null;
   state.spectrogramImage = null;
-  state.decodedBuffer = null;
-  state.waveformPeaks = [];
-  state.spectrogramBase = null;
   const waveContext = refs.waveformCanvas.getContext("2d");
   drawCanvasBackground(waveContext, refs.waveformCanvas.width, refs.waveformCanvas.height);
   drawCanvasMessage(waveContext, refs.waveformCanvas.width, refs.waveformCanvas.height, message);
@@ -633,11 +535,12 @@ function resetVisuals(message) {
 
 async function safePlay() {
   try {
-    await getAudioContext();
     await refs.audioPlayer.play();
     state.autoplayAllowed = true;
+    return true;
   } catch (error) {
     setStatus("浏览器阻止了自动播放，按 P 开始播放");
+    return false;
   }
 }
 
@@ -893,7 +796,6 @@ function updateStatusBadge(item) {
 
 function clearCurrentView(message) {
   state.currentIndex = -1;
-  state.decodedBuffer = null;
   refs.fileTitle.textContent = message;
   refs.fileSubtitle.textContent = "选择目录后开始审核";
   refs.positionText.textContent = "0 / 0";
@@ -1032,10 +934,6 @@ function hueToRgb(p, q, t) {
   if (value < 1 / 2) return q;
   if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6;
   return p;
-}
-
-function nextFrame() {
-  return new Promise((resolve) => window.requestAnimationFrame(resolve));
 }
 
 async function api(url, options = {}) {

@@ -62,6 +62,10 @@ def create_app() -> FastAPI:
     def health():
         return {"ok": True}
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon():
+        return Response(status_code=204)
+
     @app.post("/api/dialog/select-root")
     def select_root_dialog():
         try:
